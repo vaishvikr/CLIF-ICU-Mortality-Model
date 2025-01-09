@@ -197,8 +197,6 @@ icu_data <- icu_data %>%
     Ventilator = ifelse(encounter_id %in% ventilator, 1, 0)
   )
 
-
-
 # Define race and ethnicity mappings using case_when
 icu_data <- icu_data %>%
   mutate(
@@ -230,6 +228,197 @@ icu_data$ICU_stay_hrs <- as.numeric(difftime(icu_data$max_out_dttm, icu_data$min
 write.csv(icu_data, paste0( "output/ICU_cohort", '.csv'), row.names = FALSE)
 
 
+############################VASOPRESSORS and VITALS############################
+
+required_meds <- c("norepinephrine", "epinephrine", "phenylephrine",
+                   "vasopressin", "dopamine", "angiotensin")
+required_vitals <- c("weight_kg", "sbp", "dbp", "map")
+
+meds <- arrow::open_dataset(paste0(tables_location, 
+                                   "/clif_medication_admin_continuous", 
+                                   file_type)) 
+vitals <- arrow::open_dataset(paste0(tables_location, 
+                                     "/clif_vitals", 
+                                     file_type))
+
+cohort_ids <- icu_data |> 
+  select(encounter_id) |> 
+  distinct()
+
+vitals_weight_dt <- vitals |>
+  rename(encounter_id = hospitalization_id) |>
+  filter(encounter_id %in% cohort_ids$encounter_id) |>
+  filter(vital_category == "weight_kg") |>
+  select(encounter_id, recorded_dttm, weight_kg = vital_value) |>
+  collect()
+
+meds_dt <- meds |>
+  rename(encounter_id = hospitalization_id) |>
+  filter(encounter_id %in% cohort_ids$encounter_id) |>
+  filter(med_category %in% required_meds) |>
+  select(encounter_id, admin_dttm, med_category, med_dose, med_dose_unit) |>
+  collect()
+
+
+# Convert both to data.table
+setDT(vitals_weight_dt)
+setDT(meds_dt)
+setkey(vitals_weight_dt, encounter_id, recorded_dttm)
+setkey(meds_dt, encounter_id, admin_dttm)
+
+# Perform rolling join
+#forward picks the most recent weight at or before admin_time so we don't jump forward in time to a future weight.
+meds_with_weights_dt <- meds_dt[
+  vitals_weight_dt,
+  on   = .(encounter_id, admin_dttm = recorded_dttm),
+  roll = Inf 
+]
+
+# remove rows with no med dose
+meds_with_weights_dt <- meds_with_weights_dt[
+  !is.na(med_dose)
+]
+# Convert med_dose_unit to lowercase
+meds_with_weights_dt[, med_dose_unit := tolower(med_dose_unit)]
+
+# Define medications and their unit conversion information
+med_unit_info <- list(
+  norepinephrine = list(
+    required_unit = "mcg/kg/min",
+    acceptable_units = c("mcg/kg/min", "mcg/kg/hr", "mg/kg/hr", "mcg/min", "mg/hr"),
+    conversion_factors = c("mcg/kg/min" = 1, "mcg/kg/hr" = 1/60, "mg/kg/hr" = 1000/60, "mcg/min" = 1, "mg/hr" = 1000/60)
+  ),
+  epinephrine = list(
+    required_unit = "mcg/kg/min",
+    acceptable_units = c("mcg/kg/min", "mcg/kg/hr", "mg/kg/hr", "mcg/min", "mg/hr"),
+    conversion_factors = c("mcg/kg/min" = 1, "mcg/kg/hr" = 1/60, "mg/kg/hr" = 1000/60, "mcg/min" = 1, "mg/hr" = 1000/60)
+  ),
+  phenylephrine = list(
+    required_unit = "mcg/kg/min",
+    acceptable_units = c("mcg/kg/min", "mcg/kg/hr", "mg/kg/hr", "mcg/min", "mg/hr"),
+    conversion_factors = c("mcg/kg/min" = 1, "mcg/kg/hr" = 1/60, "mg/kg/hr" = 1000/60, "mcg/min" = 1, "mg/hr" = 1000/60)
+  ),
+  vasopressin = list(
+    required_unit = "units/min",
+    acceptable_units = c("units/min", "units/hr", "milliunits/min", "milliunits/hr"),
+    conversion_factors = c("units/min" = 1, "units/hr" = 1/60, "milliunits/min" = 1/1000, "milliunits/hr" = 1/1000/60)
+  ),
+  dopamine = list(
+    required_unit = "mcg/kg/min",
+    acceptable_units = c("mcg/kg/min", "mcg/kg/hr", "mg/kg/hr", "mcg/min", "mg/hr"),
+    conversion_factors = c("mcg/kg/min" = 1, "mcg/kg/hr" = 1/60, "mg/kg/hr" = 1000/60, "mcg/min" = 1, "mg/hr" = 1000/60)
+  ),
+  angiotensin = list(
+    required_unit = "mcg/kg/min",
+    acceptable_units = c("ng/kg/min", "ng/kg/hr"),
+    conversion_factors = c("ng/kg/min" = 1/1000, "ng/kg/hr" = 1/1000/60)
+  ),
+  dobutamine = list(
+    required_unit = "mcg/kg/min",
+    acceptable_units = c("mcg/kg/min", "mcg/kg/hr", "mg/kg/hr", "mcg/min", "mg/hr"),
+    conversion_factors = c("mcg/kg/min" = 1, "mcg/kg/hr" = 1/60, "mg/kg/hr" = 1000/60, "mcg/min" = 1, "mg/hr" = 1000/60)
+  )
+)
+
+get_conversion_factor <- function(med_category, med_dose_unit, weight_kg) {
+  
+  # 1) Retrieve medication info (if missing, return NA)
+  med_info <- med_unit_info[[med_category]]
+  if (is.null(med_info)) {
+    return(NA_real_)
+  }
+  
+  # 2) Convert the incoming unit to lowercase
+  med_dose_unit <- tolower(med_dose_unit)
+  
+  # 3) Check if it's an acceptable unit; if not, return NA
+  if (!(med_dose_unit %in% med_info$acceptable_units)) {
+    return(NA_real_)
+  }
+  
+  # 4) Determine conversion factor for each med+unit
+  factor <- NA_real_
+  
+  # Group 1: norepinephrine, epinephrine, phenylephrine, dopamine, metaraminol, dobutamine
+  #   required_unit: "mcg/kg/min"
+  if (med_category %in% c("norepinephrine", "epinephrine", "phenylephrine",
+                          "dopamine", "metaraminol", "dobutamine")) {
+    
+    if (med_dose_unit == "mcg/kg/min") {
+      factor <- 1
+    } else if (med_dose_unit == "mcg/kg/hr") {
+      factor <- 1 / 60
+    } else if (med_dose_unit == "mg/kg/hr") {
+      factor <- 1000 / 60
+    } else if (med_dose_unit == "mcg/min") {
+      factor <- 1 / weight_kg
+    } else if (med_dose_unit == "mg/hr") {
+      factor <- (1000 / 60) / weight_kg
+    } else {
+      return(NA_real_)
+    }
+    
+    # Group 2: angiotensin
+    #   required_unit: "mcg/kg/min"
+  } else if (med_category == "angiotensin") {
+    
+    if (med_dose_unit == "ng/kg/min") {
+      factor <- 1 / 1000
+    } else if (med_dose_unit == "ng/kg/hr") {
+      factor <- 1 / 1000 / 60
+    } else {
+      return(NA_real_)
+    }
+    
+    # Group 3: vasopressin
+    #   required_unit: "units/min"
+  } else if (med_category == "vasopressin") {
+    
+    if (med_dose_unit == "units/min") {
+      factor <- 1
+    } else if (med_dose_unit == "units/hr") {
+      factor <- 1 / 60
+    } else if (med_dose_unit == "milliunits/min") {
+      factor <- 1 / 1000
+    } else if (med_dose_unit == "milliunits/hr") {
+      factor <- 1 / 1000 / 60
+    } else {
+      return(NA_real_)
+    }
+    
+    # If none of the above, return NA
+  } else {
+    return(NA_real_)
+  }
+  
+  return(factor)
+}
+
+# Apply conversion logic 
+meds_with_weights_dt[, conversion_factor := mapply(
+  get_conversion_factor,
+  med_category,
+  med_dose_unit,
+  weight_kg
+)]
+
+meds_with_weights_dt[, med_dose_converted := 
+                       fifelse(is.na(conversion_factor),
+                               NA_real_,
+                               round(med_dose * conversion_factor, 3)  # Round to 3 decimal places
+                       )
+]
+
+
+
+
+############################SOFA-97#############################################
+
+
+
+
+
+############################TABLE ONE############################################
 # HTML content (make sure your actual HTML string is correctly input here)
 html_content <- table1(~ sex + age + race + ethnicity + Mortality + Ventilator + ICU_stay_hrs, data=icu_data)
 
