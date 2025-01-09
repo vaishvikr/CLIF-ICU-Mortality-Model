@@ -1,4 +1,5 @@
-packages <- c("jsonlite", "duckdb", "lubridate", "tidyverse", "dplyr","table1",'rvest', "readr", "arrow", "fst", "lightgbm", "caret", "Metrics", "ROCR", "pROC")
+packages <- c("jsonlite", "duckdb", "lubridate", "data.table",
+              "tidyverse", "dplyr","table1",'rvest', "readr", "arrow", "fst", "lightgbm", "caret", "Metrics", "ROCR", "pROC")
 
 install_if_missing <- function(package) {
   if (!require(package, character.only = TRUE)) {
@@ -231,7 +232,7 @@ write.csv(icu_data, paste0( "output/ICU_cohort", '.csv'), row.names = FALSE)
 ############################VASOPRESSORS and VITALS############################
 
 required_meds <- c("norepinephrine", "epinephrine", "phenylephrine",
-                   "vasopressin", "dopamine", "angiotensin")
+                   "vasopressin", "dopamine", "angiotensin", "dobutamine")
 required_vitals <- c("weight_kg", "sbp", "dbp", "map")
 
 meds <- arrow::open_dataset(paste0(tables_location, 
@@ -244,6 +245,8 @@ vitals <- arrow::open_dataset(paste0(tables_location,
 cohort_ids <- icu_data |> 
   select(encounter_id) |> 
   distinct()
+
+total_encounters <- nrow(cohort_ids)
 
 vitals_weight_dt <- vitals |>
   rename(encounter_id = hospitalization_id) |>
@@ -394,7 +397,7 @@ get_conversion_factor <- function(med_category, med_dose_unit, weight_kg) {
   return(factor)
 }
 
-# Apply conversion logic 
+# Apply conversion logic
 meds_with_weights_dt[, conversion_factor := mapply(
   get_conversion_factor,
   med_category,
@@ -409,8 +412,30 @@ meds_with_weights_dt[, med_dose_converted :=
                        )
 ]
 
+## excluding zeroes- zeores correspond to when the med was paused or stopped
+## not releavnt for calculating the median of the med dose 
+med_summaries <- as_tibble(meds_with_weights_dt) %>%
+  group_by(encounter_id, med_category) %>%
+  summarize(
+    median_dose = median(med_dose_converted, na.rm = TRUE),
+    iqr_lower   = quantile(med_dose_converted, 0.25, na.rm = TRUE),
+    iqr_upper   = quantile(med_dose_converted, 0.75, na.rm = TRUE),
+    .groups     = "drop"
+  )
 
+cohort_summaries <- med_summaries %>%
+  group_by(med_category) %>%
+  summarize(
+    overall_median_dose = median(median_dose[median_dose != 0], na.rm = TRUE),
+    overall_iqr_lower   = quantile(median_dose[median_dose != 0], 0.25, na.rm = TRUE),
+    overall_iqr_upper   = quantile(median_dose[median_dose != 0], 0.75, na.rm = TRUE),
+    n_encounters        = n_distinct(encounter_id),
+    pct_encounters      = 100 * n_encounters / total_encounters,
+    .groups             = "drop"
+  )
 
+write.csv(cohort_summaries, paste0( "output/table1_meds",site, '.csv'), 
+          row.names = FALSE)
 
 ############################SOFA-97#############################################
 
@@ -428,6 +453,8 @@ table <- read_html(html_content) %>%
 
 # The first element of the list should be your table
 df <- table[[1]]
+
+
 
 # Rename 'Overall(N=14598)' to 'fabc(N=14598)' using the site variable
 names(df) <- gsub("Overall\\(N=(\\d+)\\)", paste0(site, ' ', "(N=\\1)"), names(df))
