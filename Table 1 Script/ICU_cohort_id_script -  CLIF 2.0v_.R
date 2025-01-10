@@ -56,12 +56,25 @@ read_data <- function(file_path) {
 
 ############################     LOAD DATA         ############################
 # Read data using the function and assign to variables
-location <- read_data(paste0(tables_location, "/clif_adt", file_type))
-encounter <- read_data(paste0(tables_location, "/clif_hospitalization", file_type))
-demog <- read_data(paste0(tables_location, "/clif_patient", file_type))
-ventilator <- read_data(paste0(tables_location, "/clif_respiratory_support", file_type))
-meds <- read_data(paste0(tables_location, "/clif_medication_admin_continuous", file_type)) 
-vitals <- read_data(paste0(tables_location, "/clif_vitals", file_type))
+location <- read_data(paste0(tables_location, "/clif_adt", 
+                             file_type))
+encounter <- read_data(paste0(tables_location, "/clif_hospitalization", 
+                              file_type))
+demog <- read_data(paste0(tables_location, "/clif_patient", 
+                          file_type))
+ventilator <- read_data(paste0(tables_location, "/clif_respiratory_support", 
+                               file_type))
+meds <- read_data(paste0(tables_location, "/clif_medication_admin_continuous", 
+                         file_type)) 
+vitals <- read_data(paste0(tables_location, "/clif_vitals", 
+                           file_type))
+scores <- read_data(paste0(tables_location, 
+                           "/clif_patient_assessments", 
+                           file_type))
+labs <- read_data(paste0(tables_location, 
+                         "/clif_labs", 
+                         file_type))
+
 
 # Rename columns in the location data frame
 location <- location %>%
@@ -250,7 +263,7 @@ total_encounters <- nrow(cohort_ids)
 vitals_weight_dt <- vitals |>
   rename(encounter_id = hospitalization_id) |>
   filter(encounter_id %in% cohort_ids$encounter_id) |>
-  mutate(vital_value = as.numeric(vital_value)) |> # Convert weight_kg to numeric
+  mutate(vital_value = as.numeric(vital_value)) |> 
   filter(vital_category == "weight_kg") |>
   select(encounter_id, recorded_dttm, weight_kg = vital_value) |>
   left_join(
@@ -497,13 +510,12 @@ cohort_24hr <- icu_data |>
 
 vitals_sofa_dt <- vitals |>
   rename(encounter_id = hospitalization_id) |>
+  mutate(vital_value = as.numeric(vital_value)) |> 
   filter(encounter_id %in% cohort_24hr$encounter_id) |>
   filter(
     (vital_category == "spo2" & vital_value >= 60) |
       (vital_category == "map" & vital_value >= 30)) |>
-  select(encounter_id, recorded_dttm, vital_category, vital_value) |>
-  collect()
-vitals_sofa_dt <- as_tibble(vitals_sofa_dt)
+  select(encounter_id, recorded_dttm, vital_category, vital_value)
 
 # Filter to first 24 hours in ICU
 vitals_icu <- cohort_24hr %>%
@@ -601,9 +613,6 @@ resp_support_icu <- cohort_24hr %>%
   select(encounter_id, resp_support_max, fio2_max)
 
 ## Now Labs
-labs <- read_data(paste0(tables_location, 
-                                   "/clif_labs", 
-                                   file_type))
 labs_dt <- labs |>
   rename(encounter_id = hospitalization_id) |>
   filter(encounter_id %in% cohort_24hr$encounter_id) |>
@@ -644,25 +653,22 @@ labs_icu <- cohort_24hr %>%
     .groups = "drop")
 
 ## Now GCS Scores
-scores <- arrow::open_dataset(paste0(tables_location, 
-                                     "/clif_scores", 
-                                     file_type))
 scores_dt <- scores |>
+  rename(encounter_id = hospitalization_id) |>
   filter(encounter_id %in% cohort_24hr$encounter_id) |>
-  filter(score_name == 'NUR RA GLASGOW ADULT SCORING') |>
-  filter(!is.na(score_value)) |>
-  select(encounter_id, score_time, score_value) |>
-  collect()
-scores_dt <- as_tibble(scores_dt)
+  filter(assessment_category == "gcs_total") |> 
+  filter(!is.na(numerical_value)) |>
+  select(encounter_id, recorded_dttm, numerical_value)
+
 scores_dt$encounter_id <- as.character(scores_dt$encounter_id)
-scores_dt$min_gcs_score <- as.numeric(scores_dt$score_value)
+scores_dt$min_gcs_score <- as.numeric(scores_dt$numerical_value)
 
 scores_icu <- cohort_24hr %>%
   left_join(scores_dt) %>%
-  filter((score_time >= min_in_dttm) & (score_time <=after_24hr)) %>%
+  filter((recorded_dttm >= min_in_dttm) & (recorded_dttm <=after_24hr)) %>%
   distinct() %>%
   group_by(encounter_id, min_in_dttm, after_24hr) %>%
-  summarise(min_gcs_score = min(score_value, na.rm = TRUE))
+  summarise(min_gcs_score = min(numerical_value, na.rm = TRUE))
 
 ## Now meds
 meds_icu <- cohort_24hr %>%
