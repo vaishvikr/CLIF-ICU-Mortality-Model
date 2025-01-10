@@ -253,15 +253,34 @@ vitals_weight_dt <- vitals |>
   filter(encounter_id %in% cohort_ids$encounter_id) |>
   filter(vital_category == "weight_kg") |>
   select(encounter_id, recorded_dttm, weight_kg = vital_value) |>
-  collect()
+  left_join(
+    icu_data %>%
+      select(encounter_id, min_in_dttm, after_24hr),
+    by = "encounter_id") |>
+  # filter to the first 24 hours
+  mutate(recorded_dttm = ymd_hms(recorded_dttm)) |>  # Convert to POSIXct, adjust the function as per your date format
+  filter(
+    recorded_dttm >= min_in_dttm,
+    recorded_dttm <= after_24hr) |>
+  # optionally keep only columns you need
+  select(encounter_id, recorded_dttm, weight_kg)
 
 meds_dt <- meds |>
   rename(encounter_id = hospitalization_id) |>
   filter(encounter_id %in% cohort_ids$encounter_id) |>
   filter(med_category %in% required_meds) |>
   select(encounter_id, admin_dttm, med_category, med_dose, med_dose_unit) |>
-  collect()
-
+  # join to icu_data to get min_in_dttm and after_24hr
+  left_join(
+    icu_data %>%
+      select(encounter_id, min_in_dttm, after_24hr),
+    by = "encounter_id") |>
+  # keep only rows in the first 24 hours of ICU
+  mutate(admin_dttm = ymd_hms(admin_dttm)) |>
+  filter(
+    admin_dttm >= min_in_dttm,
+    admin_dttm <= after_24hr) |>
+  select(encounter_id, admin_dttm, med_category, med_dose, med_dose_unit)
 
 # Convert both to data.table
 setDT(vitals_weight_dt)
@@ -426,50 +445,47 @@ write.csv(cohort_med_summaries, paste0( "output/table1_meds",site, '.csv'),
 ventilator_filtered <- ventilator |> 
   rename(encounter_id = hospitalization_id) |>
   filter(encounter_id %in% cohort_ids$encounter_id) |> 
+  left_join(
+    icu_data %>%
+      select(encounter_id, min_in_dttm, after_24hr),
+    by = "encounter_id") |>
+  # keep only rows in the first 24 hours of ICU
+  mutate(recorded_dttm = ymd_hms(recorded_dttm)) |>
+  filter(
+    recorded_dttm >= min_in_dttm,
+    recorded_dttm <= after_24hr) |>
   select(encounter_id, recorded_dttm, device_category, mode_category, 
          fio2_set, peep_set)
 
 
-# Step 1: Calculate max PEEP and FiO2 for each encounter
-max_peep_fio2 <- ventilator_filtered %>%
-  group_by(encounter_id) %>%
+# Summarize 
+peep_fio2_summary <- ventilator_filtered %>%
   summarize(
-    max_peep_set = ifelse(all(is.na(peep_set)), NA, max(peep_set, na.rm = TRUE)),
-    max_fio2_set = ifelse(all(is.na(fio2_set)), NA, max(fio2_set, na.rm = TRUE)),
-    .groups = "drop"
+    median_peep = median(peep_set, na.rm = TRUE),
+    iqr_peep_lo = quantile(peep_set, 0.25, na.rm = TRUE),
+    iqr_peep_hi = quantile(peep_set, 0.75, na.rm = TRUE),
+    
+    median_fio2 = median(fio2_set, na.rm = TRUE),
+    iqr_fio2_lo = quantile(fio2_set, 0.25, na.rm = TRUE),
+    iqr_fio2_hi = quantile(fio2_set, 0.75, na.rm = TRUE)
   )
-
-# Step 2: Filter out rows with NA (or -Inf) values
-max_peep_fio2_cleaned <- max_peep_fio2 %>%
-  filter(!is.na(max_peep_set) & !is.infinite(max_peep_set) &
-           !is.na(max_fio2_set) & !is.infinite(max_fio2_set))
-
-# Step 3: Summarize 
-max_peep_fio2_summary <- max_peep_fio2_cleaned %>%
-  summarize(
-    median_peep = median(max_peep_set, na.rm = TRUE),
-    iqr_peep_lo = quantile(max_peep_set, 0.25, na.rm = TRUE),
-    iqr_peep_hi = quantile(max_peep_set, 0.75, na.rm = TRUE),
-    
-    median_fio2 = median(max_fio2_set, na.rm = TRUE),
-    iqr_fio2_lo = quantile(max_fio2_set, 0.25, na.rm = TRUE),
-    iqr_fio2_hi = quantile(max_fio2_set, 0.75, na.rm = TRUE)
-  ) 
-
-max_peep_fio2_summary <- max_peep_fio2_cleaned %>%
-  summarize(
-    median_peep = median(max_peep_set, na.rm = TRUE),
-    iqr_peep_lo = quantile(max_peep_set, 0.25, na.rm = TRUE),
-    iqr_peep_hi = quantile(max_peep_set, 0.75, na.rm = TRUE),
-    
-    median_fio2 = median(max_fio2_set, na.rm = TRUE),
-    iqr_fio2_lo = quantile(max_fio2_set, 0.25, na.rm = TRUE),
-    iqr_fio2_hi = quantile(max_fio2_set, 0.75, na.rm = TRUE)
-  ) 
 
 write.csv(max_peep_fio2_summary, paste0( "output/table1_peep_fio2",site, '.csv'), 
           row.names = FALSE)
 
+
+mode_category_summary <- ventilator_filtered %>%
+  group_by(mode_category) %>%
+  summarize(
+    n_encounters = n_distinct(encounter_id),  # Count unique encounters
+    .groups = "drop"  # Ungroup after summarizing
+  ) %>%
+  mutate(
+    pct_encounters = (n_encounters / total_encounters) * 100  # Percentage calculation
+  )
+
+write.csv(max_peep_fio2_summary, paste0( "output/table1_mode_category",site, '.csv'), 
+          row.names = FALSE)
 
 ############################SOFA-97#############################################
 
