@@ -1,5 +1,7 @@
 packages <- c("jsonlite", "duckdb", "lubridate", "data.table",
-              "tidyverse", "dplyr","table1",'rvest', "readr", "arrow", "fst", "lightgbm", "caret", "Metrics", "ROCR", "pROC")
+              "tidyverse", "dplyr","table1",'rvest', "readr", 
+              "arrow", "fst", "lightgbm", "caret", "Metrics", 
+              "ROCR", "pROC", "collapse")
 
 install_if_missing <- function(package) {
   if (!require(package, character.only = TRUE)) {
@@ -86,7 +88,9 @@ join <- location %>%
 
 # Second join operation to get 'icu_data'
 icu_data <- join %>%
-  left_join(encounter %>% select(patient_id, encounter_id, age_at_admission, discharge_category,admission_dttm), by = "encounter_id") %>%
+  left_join(encounter %>% select(patient_id, encounter_id, age_at_admission, 
+                                 discharge_category,admission_dttm), 
+            by = "encounter_id") %>%
   mutate(
     admission_dttm = ymd_hms(admission_dttm), # Convert to POSIXct, adjust the function as per your date format
     in_dttm = ymd_hms(in_dttm), # Convert to POSIXct, adjust the function as per your date format
@@ -235,12 +239,8 @@ required_meds <- c("norepinephrine", "epinephrine", "phenylephrine",
                    "vasopressin", "dopamine", "angiotensin", "dobutamine")
 required_vitals <- c("weight_kg", "sbp", "dbp", "map")
 
-meds <- arrow::open_dataset(paste0(tables_location, 
-                                   "/clif_medication_admin_continuous", 
-                                   file_type)) 
-vitals <- arrow::open_dataset(paste0(tables_location, 
-                                     "/clif_vitals", 
-                                     file_type))
+meds <- read_data(paste0(tables_location, "/clif_medication_admin_continuous", file_type)) 
+vitals <- read_data(paste0(tables_location, "/clif_vitals", file_type))
 
 cohort_ids <- icu_data |> 
   select(encounter_id) |> 
@@ -270,7 +270,8 @@ setkey(vitals_weight_dt, encounter_id, recorded_dttm)
 setkey(meds_dt, encounter_id, admin_dttm)
 
 # Perform rolling join
-#forward picks the most recent weight at or before admin_time so we don't jump forward in time to a future weight.
+#forward picks the most recent weight at or before admin_time so 
+# we don't jump forward in time to a future weight.
 meds_with_weights_dt <- meds_dt[
   vitals_weight_dt,
   on   = .(encounter_id, admin_dttm = recorded_dttm),
@@ -288,65 +289,52 @@ meds_with_weights_dt[, med_dose_unit := tolower(med_dose_unit)]
 med_unit_info <- list(
   norepinephrine = list(
     required_unit = "mcg/kg/min",
-    acceptable_units = c("mcg/kg/min", "mcg/kg/hr", "mg/kg/hr", "mcg/min", "mg/hr"),
-    conversion_factors = c("mcg/kg/min" = 1, "mcg/kg/hr" = 1/60, "mg/kg/hr" = 1000/60, "mcg/min" = 1, "mg/hr" = 1000/60)
+    acceptable_units = c("mcg/kg/min", "mcg/kg/hr", "mg/kg/hr", "mcg/min", "mg/hr")
   ),
   epinephrine = list(
     required_unit = "mcg/kg/min",
-    acceptable_units = c("mcg/kg/min", "mcg/kg/hr", "mg/kg/hr", "mcg/min", "mg/hr"),
-    conversion_factors = c("mcg/kg/min" = 1, "mcg/kg/hr" = 1/60, "mg/kg/hr" = 1000/60, "mcg/min" = 1, "mg/hr" = 1000/60)
+    acceptable_units = c("mcg/kg/min", "mcg/kg/hr", "mg/kg/hr", "mcg/min", "mg/hr")
   ),
   phenylephrine = list(
     required_unit = "mcg/kg/min",
-    acceptable_units = c("mcg/kg/min", "mcg/kg/hr", "mg/kg/hr", "mcg/min", "mg/hr"),
-    conversion_factors = c("mcg/kg/min" = 1, "mcg/kg/hr" = 1/60, "mg/kg/hr" = 1000/60, "mcg/min" = 1, "mg/hr" = 1000/60)
+    acceptable_units = c("mcg/kg/min", "mcg/kg/hr", "mg/kg/hr", "mcg/min", "mg/hr")
   ),
   vasopressin = list(
     required_unit = "units/min",
-    acceptable_units = c("units/min", "units/hr", "milliunits/min", "milliunits/hr"),
-    conversion_factors = c("units/min" = 1, "units/hr" = 1/60, "milliunits/min" = 1/1000, "milliunits/hr" = 1/1000/60)
+    acceptable_units = c("units/min", "units/hr", "milliunits/min", "milliunits/hr")
   ),
   dopamine = list(
     required_unit = "mcg/kg/min",
-    acceptable_units = c("mcg/kg/min", "mcg/kg/hr", "mg/kg/hr", "mcg/min", "mg/hr"),
-    conversion_factors = c("mcg/kg/min" = 1, "mcg/kg/hr" = 1/60, "mg/kg/hr" = 1000/60, "mcg/min" = 1, "mg/hr" = 1000/60)
+    acceptable_units = c("mcg/kg/min", "mcg/kg/hr", "mg/kg/hr", "mcg/min", "mg/hr")
   ),
   angiotensin = list(
     required_unit = "mcg/kg/min",
-    acceptable_units = c("ng/kg/min", "ng/kg/hr"),
-    conversion_factors = c("ng/kg/min" = 1/1000, "ng/kg/hr" = 1/1000/60)
+    acceptable_units = c("ng/kg/min", "ng/kg/hr")
   ),
   dobutamine = list(
     required_unit = "mcg/kg/min",
-    acceptable_units = c("mcg/kg/min", "mcg/kg/hr", "mg/kg/hr", "mcg/min", "mg/hr"),
-    conversion_factors = c("mcg/kg/min" = 1, "mcg/kg/hr" = 1/60, "mg/kg/hr" = 1000/60, "mcg/min" = 1, "mg/hr" = 1000/60)
+    acceptable_units = c("mcg/kg/min", "mcg/kg/hr", "mg/kg/hr", "mcg/min", "mg/hr")
   )
 )
 
 get_conversion_factor <- function(med_category, med_dose_unit, weight_kg) {
-  
   # 1) Retrieve medication info (if missing, return NA)
   med_info <- med_unit_info[[med_category]]
   if (is.null(med_info)) {
     return(NA_real_)
   }
-  
   # 2) Convert the incoming unit to lowercase
   med_dose_unit <- tolower(med_dose_unit)
-  
   # 3) Check if it's an acceptable unit; if not, return NA
   if (!(med_dose_unit %in% med_info$acceptable_units)) {
     return(NA_real_)
   }
-  
   # 4) Determine conversion factor for each med+unit
   factor <- NA_real_
-  
   # Group 1: norepinephrine, epinephrine, phenylephrine, dopamine, metaraminol, dobutamine
   #   required_unit: "mcg/kg/min"
   if (med_category %in% c("norepinephrine", "epinephrine", "phenylephrine",
                           "dopamine", "metaraminol", "dobutamine")) {
-    
     if (med_dose_unit == "mcg/kg/min") {
       factor <- 1
     } else if (med_dose_unit == "mcg/kg/hr") {
@@ -360,7 +348,6 @@ get_conversion_factor <- function(med_category, med_dose_unit, weight_kg) {
     } else {
       return(NA_real_)
     }
-    
     # Group 2: angiotensin
     #   required_unit: "mcg/kg/min"
   } else if (med_category == "angiotensin") {
@@ -372,7 +359,6 @@ get_conversion_factor <- function(med_category, med_dose_unit, weight_kg) {
     } else {
       return(NA_real_)
     }
-    
     # Group 3: vasopressin
     #   required_unit: "units/min"
   } else if (med_category == "vasopressin") {
@@ -388,12 +374,10 @@ get_conversion_factor <- function(med_category, med_dose_unit, weight_kg) {
     } else {
       return(NA_real_)
     }
-    
     # If none of the above, return NA
   } else {
     return(NA_real_)
   }
-  
   return(factor)
 }
 
@@ -423,7 +407,7 @@ med_summaries <- as_tibble(meds_with_weights_dt) %>%
     .groups     = "drop"
   )
 
-cohort_summaries <- med_summaries %>%
+cohort_med_summaries <- med_summaries %>%
   group_by(med_category) %>%
   summarize(
     overall_median_dose = median(median_dose[median_dose != 0], na.rm = TRUE),
@@ -434,14 +418,338 @@ cohort_summaries <- med_summaries %>%
     .groups             = "drop"
   )
 
-write.csv(cohort_summaries, paste0( "output/table1_meds",site, '.csv'), 
+write.csv(cohort_med_summaries, paste0( "output/table1_meds",site, '.csv'), 
           row.names = FALSE)
+
+######################VENTILATOR SUMMARY########################################
+
+ventilator_filtered <- ventilator |> 
+  rename(encounter_id = hospitalization_id) |>
+  filter(encounter_id %in% cohort_ids$encounter_id) |> 
+  select(encounter_id, recorded_dttm, device_category, mode_category, 
+         fio2_set, peep_set)
+
+
+# Step 1: Calculate max PEEP and FiO2 for each encounter
+max_peep_fio2 <- ventilator_filtered %>%
+  group_by(encounter_id) %>%
+  summarize(
+    max_peep_set = ifelse(all(is.na(peep_set)), NA, max(peep_set, na.rm = TRUE)),
+    max_fio2_set = ifelse(all(is.na(fio2_set)), NA, max(fio2_set, na.rm = TRUE)),
+    .groups = "drop"
+  )
+
+# Step 2: Filter out rows with NA (or -Inf) values
+max_peep_fio2_cleaned <- max_peep_fio2 %>%
+  filter(!is.na(max_peep_set) & !is.infinite(max_peep_set) &
+           !is.na(max_fio2_set) & !is.infinite(max_fio2_set))
+
+# Step 3: Summarize 
+max_peep_fio2_summary <- max_peep_fio2_cleaned %>%
+  summarize(
+    median_peep = median(max_peep_set, na.rm = TRUE),
+    iqr_peep_lo = quantile(max_peep_set, 0.25, na.rm = TRUE),
+    iqr_peep_hi = quantile(max_peep_set, 0.75, na.rm = TRUE),
+    
+    median_fio2 = median(max_fio2_set, na.rm = TRUE),
+    iqr_fio2_lo = quantile(max_fio2_set, 0.25, na.rm = TRUE),
+    iqr_fio2_hi = quantile(max_fio2_set, 0.75, na.rm = TRUE)
+  ) 
+
+max_peep_fio2_summary <- max_peep_fio2_cleaned %>%
+  summarize(
+    median_peep = median(max_peep_set, na.rm = TRUE),
+    iqr_peep_lo = quantile(max_peep_set, 0.25, na.rm = TRUE),
+    iqr_peep_hi = quantile(max_peep_set, 0.75, na.rm = TRUE),
+    
+    median_fio2 = median(max_fio2_set, na.rm = TRUE),
+    iqr_fio2_lo = quantile(max_fio2_set, 0.25, na.rm = TRUE),
+    iqr_fio2_hi = quantile(max_fio2_set, 0.75, na.rm = TRUE)
+  ) 
+
+write.csv(max_peep_fio2_summary, paste0( "output/table1_peep_fio2",site, '.csv'), 
+          row.names = FALSE)
+
 
 ############################SOFA-97#############################################
 
+# Start with Vitals to get MAP and SpO2
+cohort_24hr <- icu_data |> 
+  select(encounter_id, min_in_dttm, after_24hr) |> 
+  distinct()
+
+vitals_sofa_dt <- vitals |>
+  rename(encounter_id = hospitalization_id) |>
+  filter(encounter_id %in% cohort_24hr$encounter_id) |>
+  filter(
+    (vital_category == "spo2" & vital_value >= 60) |
+      (vital_category == "map" & vital_value >= 30)) |>
+  select(encounter_id, recorded_dttm, vital_category, vital_value) |>
+  collect()
+vitals_sofa_dt <- as_tibble(vitals_sofa_dt)
+
+# Filter to first 24 hours in ICU
+vitals_icu <- cohort_24hr %>%
+  left_join(vitals_sofa_dt) %>%
+  filter((recorded_dttm >= min_in_dttm) & (recorded_dttm <=after_24hr)) %>%
+  select(encounter_id, recorded_dttm, vital_category, vital_value)%>%
+  group_by(encounter_id, recorded_dttm, vital_category) %>%
+  summarise(worst_value = min(vital_value, na.rm = TRUE)) %>%
+  pivot_wider(
+    names_from = vital_category,
+    values_from = worst_value)
+rm(vitals_sofa_dt)
+
+calc_pao2 <- function(s) {
+  s <- s / 100
+  a <- (11700) / ((1 / s) - 1)
+  b <- sqrt((50^3) + (a^2))
+  pao2 <- ((b + a)^(1/3)) - ((b - a)^(1/3))
+  return(pao2)
+}
+
+vitals_icu <- vitals_icu %>%
+  mutate(pao2_imputed_min = calc_pao2(spo2)) %>%
+  # Replace with NA if SpO2 >= 97
+  mutate(pao2_imputed_min = ifelse(spo2>=97, NA, pao2_imputed_min)) %>%
+  group_by(encounter_id) %>%
+  summarise(
+    pao2_imputed_min = if (all(is.na(pao2_imputed_min))) NA_real_ else min(pao2_imputed_min, na.rm = TRUE),
+    spo2_min = if (all(is.na(spo2))) NA_real_ else min(spo2, na.rm = TRUE),
+    map_min = if (all(is.na(map))) NA_real_ else min(map, na.rm = TRUE),
+    .groups = "drop")
+
+resp_support_dt <- ventilator |>
+  filter(encounter_id %in% cohort_24hr$encounter_id) |>
+  select(encounter_id, recorded_dttm, device_category, mode_category, peep_set, tidal_volume_set, 
+         lpm_set, fio2_set) |>
+  mutate(fio2_set = ifelse((fio2_set<0.21 | fio2_set>1), NA, fio2_set)) 
+resp_support_dt <- as_tibble(resp_support_dt)
+resp_support_dt$encounter_id <- as.character(resp_support_dt$encounter_id)
+
+resp_support_icu <- cohort_24hr %>%
+  left_join(resp_support_dt) %>%
+  filter((recorded_dttm >= min_in_dttm) & (recorded_dttm <=after_24hr)) %>%
+  # Try to fill in device based on other values
+  mutate(device_category = case_when(
+    !is.na(device_category) ~ device_category,
+    mode_category %in% c("SIMV", "Pressure-regulated Volume Control", "Assist Control-Volume Control") ~ "Vent",
+    is.na(device_category) & fio2_set == 0.21 & is.na(lpm_set) & is.na(peep_set) & is.na(tidal_volume_set) ~ "Room Air",
+    is.na(device_category) & is.na(fio2_set) & lpm_set == 0 & is.na(peep_set) & is.na(tidal_volume_set) ~ "Room Air",
+    is.na(device_category) & is.na(fio2_set) & lpm_set <= 20 & lpm_set > 0 & is.na(peep_set) & is.na(tidal_volume_set) ~ "Nasal Cannula",
+    is.na(device_category) & is.na(fio2_set) & lpm_set > 20 & is.na(peep_set) & is.na(tidal_volume_set) ~ "High Flow NC",
+    device_category == "Nasal Cannula" & is.na(fio2_set) & lpm_set > 20 ~ "High Flow NC",
+    TRUE ~ device_category # Keep original device_category if no condition is met
+  )) %>%
+  # Try to fill in FiO2 based on other values
+  mutate(fio2_combined = case_when(
+    !is.na(fio2_set) ~ fio2_set,
+    is.na(fio2_set) & device_category == "Room Air" ~ 0.21,
+    is.na(fio2_set) & device_category == "Nasal Cannula" ~ (0.24 + (0.04 * lpm_set)),
+    TRUE ~ NA_real_
+  )) %>%
+  select(encounter_id, recorded_dttm, device_category, fio2_combined) %>%
+  # Rank devices to get highest level of support
+  mutate(device_rank = case_when(
+    device_category == 'Vent' ~ 1,
+    device_category == 'NIPPV' ~ 2,
+    device_category == 'CPAP' ~ 3,
+    device_category == 'High Flow NC' ~ 4,
+    device_category == 'Face Mask' ~ 5,
+    device_category == 'Trach Collar' ~ 6,
+    device_category == 'Nasal Cannula' ~ 7,
+    device_category == 'Other' ~ 8,
+    device_category == 'Room Air' ~ 9,
+    TRUE ~ NA_integer_
+  )) %>%
+  group_by(encounter_id) %>%
+  # Get worst FiO2 and device
+  summarise(
+    device_rank_min = if (all(is.na(device_rank))) NA_real_ else min(device_rank, na.rm = TRUE),
+    fio2_max = if (all(is.na(fio2_combined))) NA_real_ else max(fio2_combined, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(resp_support_max = case_when(
+    device_rank_min == 1 ~ 'Vent',
+    device_rank_min == 2 ~ 'NIPPV',
+    device_rank_min == 3 ~ 'CPAP',
+    device_rank_min == 4 ~ 'High Flow NC',
+    device_rank_min == 5 ~ 'Face Mask',
+    device_rank_min == 6 ~ 'Trach Collar',
+    device_rank_min == 7 ~ 'Nasal Cannula',
+    device_rank_min == 8 ~ 'Other',
+    device_rank_min == 9 ~ 'Room Air',
+    TRUE ~ NA_character_
+  )) %>%
+  select(encounter_id, resp_support_max, fio2_max)
+
+## Now Labs
+labs <- read_data(paste0(tables_location, 
+                                   "/clif_labs", 
+                                   file_type))
+labs_dt <- labs |>
+  rename(encounter_id = hospitalization_id) |>
+  filter(encounter_id %in% cohort_24hr$encounter_id) |>
+  filter(
+    (lab_category == "creatinine" & lab_value_numeric >= 0 & lab_value_numeric <= 20) |
+      (lab_category == "bilirubin_total" & lab_value_numeric >= 0 & lab_value_numeric <= 80)|
+      (lab_category == "po2_arterial" & lab_value_numeric >= 30 & lab_value_numeric <= 200)|
+      (lab_category == "platelet_count" & lab_value_numeric >= 0 & lab_value_numeric <= 2000)) |>
+  filter(!is.na(lab_value_numeric)) |>
+  select(encounter_id, lab_order_dttm, lab_category, lab_value_numeric) 
+# labs_dt <- as_tibble(labs_dt)
+
+# Filter for labs taken within first 24 hours of being in the ICU
+labs_icu <- cohort_24hr %>%
+  left_join(labs_dt) %>%
+  filter((lab_order_dttm >= min_in_dttm) & (lab_order_dttm <=after_24hr)) %>%
+  distinct() %>%
+  # Get unique values by time
+  # Summarize the minimum and maximum values of each lab category
+  group_by(encounter_id, min_in_dttm, after_24hr, lab_order_dttm, lab_category) %>% 
+  reframe(
+    worst_value = case_when(
+      lab_category %in% c("creatinine", "bilirubin_total") ~ max(lab_value_numeric, na.rm = TRUE),
+      lab_category %in% c("po2_arterial", "platelet_count") ~ min(lab_value_numeric, na.rm = TRUE),
+    )) %>% 
+  distinct() %>%
+  # Pivot wider
+  pivot_wider(
+    names_from = lab_category,
+    values_from = worst_value) %>%
+  # Summarize the minimum and maximum values of each lab category for whole 24 hours, return NA if missing
+  group_by(encounter_id, min_in_dttm, after_24hr) %>% 
+  summarise(
+    creatinine_max = if (all(is.na(creatinine))) NA_real_ else max(creatinine, na.rm = TRUE),
+    bilirubin_total_max = if (all(is.na(bilirubin_total))) NA_real_ else max(bilirubin_total, na.rm = TRUE),
+    po2_arterial_min = if (all(is.na(po2_arterial))) NA_real_ else min(po2_arterial, na.rm = TRUE),
+    platelet_count_min = if (all(is.na(platelet_count))) NA_real_ else min(platelet_count, na.rm = TRUE),
+    .groups = "drop")
+
+## Now GCS Scores
+scores <- arrow::open_dataset(paste0(tables_location, 
+                                     "/clif_scores", 
+                                     file_type))
+scores_dt <- scores |>
+  filter(encounter_id %in% cohort_24hr$encounter_id) |>
+  filter(score_name == 'NUR RA GLASGOW ADULT SCORING') |>
+  filter(!is.na(score_value)) |>
+  select(encounter_id, score_time, score_value) |>
+  collect()
+scores_dt <- as_tibble(scores_dt)
+scores_dt$encounter_id <- as.character(scores_dt$encounter_id)
+scores_dt$min_gcs_score <- as.numeric(scores_dt$score_value)
+
+scores_icu <- cohort_24hr %>%
+  left_join(scores_dt) %>%
+  filter((score_time >= min_in_dttm) & (score_time <=after_24hr)) %>%
+  distinct() %>%
+  group_by(encounter_id, min_in_dttm, after_24hr) %>%
+  summarise(min_gcs_score = min(score_value, na.rm = TRUE))
+
+## Now meds
+meds_icu <- cohort_24hr %>%
+  left_join(meds_with_weights_dt) %>%
+  filter((admin_dttm >= min_in_dttm) & (admin_dttm <=after_24hr)) %>%
+  select(encounter_id, admin_dttm, med_category, med_dose_converted) %>%
+  distinct() %>%
+  group_by(encounter_id, admin_dttm, med_category) %>%
+  summarise(worst_value = max(med_dose_converted, na.rm = TRUE)) %>%
+  pivot_wider(
+    names_from = med_category,
+    values_from = worst_value)
 
 
+# Join to Vitals, Respiratory Support, Labs, Meds, and Scores to calculate SOFA
+icu_sofa_data <- cohort_24hr %>% 
+  left_join(resp_support_icu) %>%
+  left_join(vitals_icu) %>%
+  left_join(labs_icu) %>%
+  left_join(scores_icu) %>%
+  left_join(meds_icu) %>%
+  mutate(p_f = ifelse(!is.na(fio2_max) & !is.na(po2_arterial_min), po2_arterial_min / fio2_max, NA),
+         p_f_imputed = ifelse(!is.na(fio2_max) & !is.na(pao2_imputed_min), pao2_imputed_min / fio2_max, NA),
+         s_f = ifelse(!is.na(fio2_max) & !is.na(spo2_min), spo2_min / fio2_max, NA))
 
+
+# Calculate SOFA
+icu_sofa_data <- icu_sofa_data %>%
+  mutate(
+    sofa_cv_97 = case_when(
+      dopamine > 15 | epinephrine > 0.1 | norepinephrine > 0.1 ~ 4,
+      dopamine > 5 | (epinephrine <= 0.1 & epinephrine>0) | (norepinephrine <= 0.1 & norepinephrine>0)~ 3,
+      (dopamine <= 5 & dopamine>0) | dobutamine>0 ~ 2,
+      map_min < 70 ~ 1,
+      TRUE ~ 0
+    ),
+    sofa_coag = case_when(
+      platelet_count_min < 20 ~ 4,
+      platelet_count_min < 50 ~ 3,
+      platelet_count_min < 100 ~ 2,
+      platelet_count_min < 150 ~ 1,
+      TRUE ~ 0
+    ),
+    sofa_liver = case_when(
+      bilirubin_total_max >= 12.0 ~ 4,
+      bilirubin_total_max >= 6.0 ~ 3,
+      bilirubin_total_max >= 2.0 ~ 2,
+      bilirubin_total_max >= 1.2 ~ 1,
+      TRUE ~ 0
+    ),
+    sofa_renal = case_when(
+      creatinine_max >= 5.0 ~ 4,
+      creatinine_max >= 3.5 & creatinine_max < 5.0 ~ 3,
+      creatinine_max >= 2.0 & creatinine_max < 3.5 ~ 2,
+      creatinine_max >= 1.2 & creatinine_max < 2.0 ~ 1,
+      TRUE ~ 0
+    ),
+    sofa_resp_pf = case_when(
+      p_f < 100 & (resp_support_max == "NIPPV" | resp_support_max == "CPAP" | resp_support_max == "Vent") ~ 4,
+      p_f < 200 & (resp_support_max == "NIPPV"| resp_support_max == "CPAP" | resp_support_max == "Vent") ~ 3,
+      p_f < 300 ~ 2,
+      p_f < 400 ~ 1,
+      TRUE ~ 0
+    ),
+    sofa_resp_pf_imp = case_when(
+      p_f_imputed < 100 & (resp_support_max == "NIPPV" | resp_support_max == "CPAP" | resp_support_max == "Vent") ~ 4,
+      p_f_imputed < 200 & (resp_support_max == "NIPPV" | resp_support_max == "CPAP" | resp_support_max == "Vent") ~ 3,
+      p_f_imputed < 300 ~ 2,
+      p_f_imputed < 400 ~ 1,
+      TRUE ~ 0
+    ),
+    sofa_cns = case_when(
+      min_gcs_score < 6 ~ 4,
+      min_gcs_score >= 6 & min_gcs_score <= 9 ~ 3,
+      min_gcs_score >= 10 & min_gcs_score <= 12 ~ 2,
+      min_gcs_score >= 13 & min_gcs_score <= 14 ~ 1,
+      TRUE ~ 0
+    ))
+icu_sofa_data <- icu_sofa_data %>% rowwise() %>%
+  mutate(sofa_resp = max(sofa_resp_pf, sofa_resp_pf_imp, na.rm=T))
+
+icu_sofa_data$sofa_97_24hr <- icu_sofa_data$sofa_cv_97 + 
+  icu_sofa_data$sofa_coag + 
+  icu_sofa_data$sofa_renal + 
+  icu_sofa_data$sofa_liver + 
+  icu_sofa_data$sofa_resp + 
+  icu_sofa_data$sofa_cns
+
+summary_sofa_df <- icu_sofa_data %>%
+  select(encounter_id, sofa_97_24hr, sofa_cv_97, sofa_coag, sofa_renal, sofa_liver, sofa_resp, sofa_cns) %>%
+  pivot_longer(
+    cols = -encounter_id,
+    names_to = "sofa_category",
+    values_to = "sofa_value") %>%
+  group_by(sofa_category) %>%
+  summarize(
+    overall_median = median(sofa_value, na.rm = TRUE),
+    overall_iqr_lower   = quantile(sofa_value, 0.25, na.rm = TRUE),
+    overall_iqr_upper   = quantile(sofa_value, 0.75, na.rm = TRUE),
+    .groups             = "drop"
+  )
+
+write.csv(summary_sofa_df, paste0( "output/table1_sofa",site, '.csv'), 
+          row.names = FALSE)
 
 ############################TABLE ONE############################################
 # HTML content (make sure your actual HTML string is correctly input here)
@@ -453,8 +761,6 @@ table <- read_html(html_content) %>%
 
 # The first element of the list should be your table
 df <- table[[1]]
-
-
 
 # Rename 'Overall(N=14598)' to 'fabc(N=14598)' using the site variable
 names(df) <- gsub("Overall\\(N=(\\d+)\\)", paste0(site, ' ', "(N=\\1)"), names(df))
