@@ -54,12 +54,14 @@ read_data <- function(file_path) {
   }
 }
 
-
+############################     LOAD DATA         ############################
 # Read data using the function and assign to variables
 location <- read_data(paste0(tables_location, "/clif_adt", file_type))
 encounter <- read_data(paste0(tables_location, "/clif_hospitalization", file_type))
 demog <- read_data(paste0(tables_location, "/clif_patient", file_type))
 ventilator <- read_data(paste0(tables_location, "/clif_respiratory_support", file_type))
+meds <- read_data(paste0(tables_location, "/clif_medication_admin_continuous", file_type)) 
+vitals <- read_data(paste0(tables_location, "/clif_vitals", file_type))
 
 # Rename columns in the location data frame
 location <- location %>%
@@ -187,7 +189,7 @@ icu_data <- icu_data %>%
   left_join(demog, by = "patient_id") %>%
   select(encounter_id, min_in_dttm, after_24hr,max_out_dttm, age, dispo, sex, ethnicity, race)
 
-ventilator <- ventilator %>%
+ventilator_imv <- ventilator %>%
   filter(device_category =="IMV")%>%
   select(encounter_id) %>% distinct() %>% deframe()
 
@@ -199,7 +201,7 @@ icu_data <- icu_data %>%
     isfemale = as.integer(tolower(sex) == "female"),
     Mortality  = as.integer(grepl("dead|expired|death|died", dispo, ignore.case = TRUE)),
     site = site,
-    Ventilator = ifelse(encounter_id %in% ventilator, 1, 0)
+    Ventilator = ifelse(encounter_id %in% ventilator_imv, 1, 0)
   )
 
 # Define race and ethnicity mappings using case_when
@@ -239,9 +241,6 @@ required_meds <- c("norepinephrine", "epinephrine", "phenylephrine",
                    "vasopressin", "dopamine", "angiotensin", "dobutamine")
 required_vitals <- c("weight_kg", "sbp", "dbp", "map")
 
-meds <- read_data(paste0(tables_location, "/clif_medication_admin_continuous", file_type)) 
-vitals <- read_data(paste0(tables_location, "/clif_vitals", file_type))
-
 cohort_ids <- icu_data |> 
   select(encounter_id) |> 
   distinct()
@@ -251,6 +250,7 @@ total_encounters <- nrow(cohort_ids)
 vitals_weight_dt <- vitals |>
   rename(encounter_id = hospitalization_id) |>
   filter(encounter_id %in% cohort_ids$encounter_id) |>
+  mutate(vital_value = as.numeric(vital_value)) |> # Convert weight_kg to numeric
   filter(vital_category == "weight_kg") |>
   select(encounter_id, recorded_dttm, weight_kg = vital_value) |>
   left_join(
@@ -443,14 +443,15 @@ write.csv(cohort_med_summaries, paste0( "output/table1_meds",site, '.csv'),
 ######################VENTILATOR SUMMARY########################################
 
 ventilator_filtered <- ventilator |> 
-  rename(encounter_id = hospitalization_id) |>
   filter(encounter_id %in% cohort_ids$encounter_id) |> 
   left_join(
     icu_data %>%
       select(encounter_id, min_in_dttm, after_24hr),
     by = "encounter_id") |>
   # keep only rows in the first 24 hours of ICU
-  mutate(recorded_dttm = ymd_hms(recorded_dttm)) |>
+  mutate(recorded_dttm = ymd_hms(recorded_dttm),
+         fio2_set = as.numeric(fio2_set),
+         peep_set = as.numeric(peep_set)) |>
   filter(
     recorded_dttm >= min_in_dttm,
     recorded_dttm <= after_24hr) |>
@@ -470,7 +471,7 @@ peep_fio2_summary <- ventilator_filtered %>%
     iqr_fio2_hi = quantile(fio2_set, 0.75, na.rm = TRUE)
   )
 
-write.csv(max_peep_fio2_summary, paste0( "output/table1_peep_fio2",site, '.csv'), 
+write.csv(peep_fio2_summary, paste0( "output/table1_peep_fio2",site, '.csv'), 
           row.names = FALSE)
 
 
@@ -484,7 +485,7 @@ mode_category_summary <- ventilator_filtered %>%
     pct_encounters = (n_encounters / total_encounters) * 100  # Percentage calculation
   )
 
-write.csv(max_peep_fio2_summary, paste0( "output/table1_mode_category",site, '.csv'), 
+write.csv(mode_category_summary, paste0( "output/table1_mode_category",site, '.csv'), 
           row.names = FALSE)
 
 ############################SOFA-97#############################################
