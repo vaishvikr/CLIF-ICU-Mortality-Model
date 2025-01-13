@@ -2,7 +2,7 @@
 
 # Script Name: ICU_cohort_id_script.R
 # Purpose: Identify the cohort for CLIF concept paper POCs and generate table 1
-# Author: Vaishvik Chaudhari, Kaveri Chhikara, Rachel Baccile
+# Authors: Vaishvik Chaudhari, Kaveri Chhikara, Rachel Baccile
 # Inputs: 1. CLIF-2.0 tables - patient, hospitalization, ADT, vitals, labs, 
 #                           respiratory support, medication admin continuous, 
 #                           patient assessments
@@ -13,6 +13,7 @@
 #          4. table1_mode_category_<site>.csv; 
 #          5. table1_sofa_<site>.csv; 
 #          6. table1_<site>.csv
+#          7. histograms of vent settings and SOFA components
 
 ########################## SETUP ###############################################
 packages <- c("jsonlite", "duckdb", "lubridate", "data.table",
@@ -795,7 +796,7 @@ labs_dt <- labs |>
   filter(
     (lab_category == "creatinine" & lab_value_numeric >= 0 & lab_value_numeric <= 20) |
       (lab_category == "bilirubin_total" & lab_value_numeric >= 0 & lab_value_numeric <= 80)|
-      (lab_category == "po2_arterial" & lab_value_numeric >= 30 & lab_value_numeric <= 200)|
+      (lab_category == "po2_arterial" & lab_value_numeric >= 30 & lab_value_numeric <= 700)|
       (lab_category == "platelet_count" & lab_value_numeric >= 0 & lab_value_numeric <= 2000)) |>
   filter(!is.na(lab_value_numeric)) |>
   select(encounter_id, lab_order_dttm, lab_category, lab_value_numeric) 
