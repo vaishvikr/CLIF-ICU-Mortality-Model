@@ -604,7 +604,7 @@ required_modes <- c('Assist Control-Volume Control',
                     'Other')
 
 mode_cat_filtered <- ventilator_filtered |>
-  filter(!is.na(mode_category)) |> 
+  filter(!is.na(mode_category)& mode_category != "") |> 
   arrange(encounter_id, recorded_dttm) |>  
   group_by(encounter_id) |> 
   slice_head(n=1) |>  # Get the first row for each encounter
