@@ -3,18 +3,21 @@
 # Script Name: ICU_cohort_id_script.R
 # Purpose: Identify the cohort for CLIF concept paper POCs and generate table 1
 # Author: Vaishvik Chaudhari, Kaveri Chhikara, Rachel Baccile
-# Inputs: CLIF-2.0 tables - patient, hospitalization, ADT, vitals, labs, 
+# Inputs: 1. CLIF-2.0 tables - patient, hospitalization, ADT, vitals, labs, 
 #                           respiratory support, medication admin continuous, 
 #                           patient assessments
-#.        config.json elements
-# Outputs: icu_data.csv (intermediate dataset for further analysis); 
-#          table1_meds_<site>.csv; table1_peep_fio2_<site>.csv; 
-#          table1_mode_category_<site>.csv; table1_sofa_<site>.csv; table1_<site>.csv
+#.        2. config.json elements
+# Outputs: 1. icu_data.csv (intermediate dataset for further analysis); 
+#          2. table1_meds_<site>.csv; 
+#          3. table1_peep_fio2_<site>.csv; 
+#          4. table1_mode_category_<site>.csv; 
+#          5. table1_sofa_<site>.csv; 
+#          6. table1_<site>.csv
 
 ########################## SETUP ###############################################
 packages <- c("jsonlite", "duckdb", "lubridate", "data.table",
-              "tidyverse", "dplyr","table1",'rvest', "readr", 
-              "arrow", "fst", "lightgbm", "caret", "Metrics", 
+              "tidyverse", "dplyr","table1",'rvest', "readr", "ggplot",
+              "arrow", "fst", "lightgbm", "caret", "Metrics", "pathwork",
               "ROCR", "pROC", "collapse")
 
 install_if_missing <- function(package) {
@@ -44,18 +47,21 @@ load_config <- function() {
 # Load the configuration
 config <- load_config()
 
-
-
 tables_location <- config$clif2_path
 site <-config$site
 file_type <- paste0(".", config$filetype)
-
 
 # Check if the output directory exists; if not, create it
 if (!dir.exists("output")) {
   dir.create("output")
 }
 
+# Check if the output directory exists; if not, create it
+if (!dir.exists("output/graphs")) {
+  dir.create("output/graphs")
+}
+
+############################ FUNCTIONS  ########################################
 read_data <- function(file_path) {
   if (grepl("\\.csv$", file_path)) {
     return(read.csv(file_path))
@@ -68,6 +74,107 @@ read_data <- function(file_path) {
   }
 }
 
+generate_histograms <- function(df, numeric_vars, bins = 30, 
+                                color = "darkblue", 
+                                output_path = "output/histograms.png",
+                                max_cols = 3) {
+  # Create individual histograms for each numeric variable
+  plots <- lapply(numeric_vars, function(var) {
+    ggplot(df, aes_string(x = var)) +
+      geom_histogram(bins = bins, fill = color, color = "black", alpha = 0.7) +
+      labs(
+        title = paste("Histogram of", var),
+        x = var,
+        y = "Frequency"
+      ) +
+      theme_minimal()
+  })
+  # Arrange the plots in a grid
+  combined_plot <- wrap_plots(plots, ncol = max_cols)
+  # Save the combined plot
+  ggsave(
+    filename = output_path,
+    plot = combined_plot,
+    width = min(50, max_cols * 5),   # Adjust width based on columns
+    height = min(50, ceiling(length(numeric_vars) / max_cols) * 5),  # Adjust height based on rows
+    limitsize = FALSE               # Override the size limit
+  )
+  message("Histograms saved to: ", output_path)
+}
+
+
+get_conversion_factor <- function(med_category, med_dose_unit, weight_kg) {
+  # 1) Retrieve medication info (if missing, return NA)
+  med_info <- med_unit_info[[med_category]]
+  if (is.null(med_info)) {
+    return(NA_real_)
+  }
+  # 2) Convert the incoming unit to lowercase
+  med_dose_unit <- tolower(med_dose_unit)
+  # 3) Check if it's an acceptable unit; if not, return NA
+  if (!(med_dose_unit %in% med_info$acceptable_units)) {
+    return(NA_real_)
+  }
+  # 4) Determine conversion factor for each med+unit
+  factor <- NA_real_
+  # Group 1: norepinephrine, epinephrine, phenylephrine, dopamine, metaraminol, dobutamine
+  #   required_unit: "mcg/kg/min"
+  if (med_category %in% c("norepinephrine", "epinephrine", "phenylephrine",
+                          "dopamine", "milrinone", "dobutamine")) {
+    if (med_dose_unit == "mcg/kg/min") {
+      factor <- 1
+    } else if (med_dose_unit == "mcg/kg/hr") {
+      factor <- 1 / 60
+    } else if (med_dose_unit == "mg/kg/hr") {
+      factor <- 1000 / 60
+    } else if (med_dose_unit == "mcg/min") {
+      factor <- 1 / weight_kg
+    } else if (med_dose_unit == "mg/hr") {
+      factor <- (1000 / 60) / weight_kg
+    } else {
+      return(NA_real_)
+    }
+    # Group 2: angiotensin
+    #   required_unit: "mcg/kg/min"
+  } else if (med_category == "angiotensin") {
+    
+    if (med_dose_unit == "ng/kg/min") {
+      factor <- 1 / 1000
+    } else if (med_dose_unit == "ng/kg/hr") {
+      factor <- 1 / 1000 / 60
+    } else {
+      return(NA_real_)
+    }
+    # Group 3: vasopressin
+    #   required_unit: "units/min"
+  } else if (med_category == "vasopressin") {
+    
+    if (med_dose_unit == "units/min") {
+      factor <- 1
+    } else if (med_dose_unit == "units/hr") {
+      factor <- 1 / 60
+    } else if (med_dose_unit == "milliunits/min") {
+      factor <- 1 / 1000
+    } else if (med_dose_unit == "milliunits/hr") {
+      factor <- 1 / 1000 / 60
+    } else {
+      return(NA_real_)
+    }
+    # If none of the above, return NA
+  } else {
+    return(NA_real_)
+  }
+  return(factor)
+}
+
+
+calc_pao2 <- function(s) {
+  s <- s / 100
+  a <- (11700) / ((1 / s) - 1)
+  b <- sqrt((50^3) + (a^2))
+  pao2 <- ((b + a)^(1/3)) - ((b - a)^(1/3))
+  return(pao2)
+}
 ############################     LOAD DATA         ############################
 # Read data using the function and assign to variables
 location <- read_data(paste0(tables_location, "/clif_adt", 
@@ -79,7 +186,7 @@ demog <- read_data(paste0(tables_location, "/clif_patient",
 ventilator <- read_data(paste0(tables_location, "/clif_respiratory_support", 
                                file_type))
 
-############################ COHORT IDENTEIFICATION ############################
+############################ COHORT IDENTIFICATION ############################
 # Rename columns in the location data frame
 location <- location %>%
   rename(encounter_id = hospitalization_id)
@@ -371,70 +478,6 @@ med_unit_info <- list(
   )
 )
 
-get_conversion_factor <- function(med_category, med_dose_unit, weight_kg) {
-  # 1) Retrieve medication info (if missing, return NA)
-  med_info <- med_unit_info[[med_category]]
-  if (is.null(med_info)) {
-    return(NA_real_)
-  }
-  # 2) Convert the incoming unit to lowercase
-  med_dose_unit <- tolower(med_dose_unit)
-  # 3) Check if it's an acceptable unit; if not, return NA
-  if (!(med_dose_unit %in% med_info$acceptable_units)) {
-    return(NA_real_)
-  }
-  # 4) Determine conversion factor for each med+unit
-  factor <- NA_real_
-  # Group 1: norepinephrine, epinephrine, phenylephrine, dopamine, metaraminol, dobutamine
-  #   required_unit: "mcg/kg/min"
-  if (med_category %in% c("norepinephrine", "epinephrine", "phenylephrine",
-                          "dopamine", "milrinone", "dobutamine")) {
-    if (med_dose_unit == "mcg/kg/min") {
-      factor <- 1
-    } else if (med_dose_unit == "mcg/kg/hr") {
-      factor <- 1 / 60
-    } else if (med_dose_unit == "mg/kg/hr") {
-      factor <- 1000 / 60
-    } else if (med_dose_unit == "mcg/min") {
-      factor <- 1 / weight_kg
-    } else if (med_dose_unit == "mg/hr") {
-      factor <- (1000 / 60) / weight_kg
-    } else {
-      return(NA_real_)
-    }
-    # Group 2: angiotensin
-    #   required_unit: "mcg/kg/min"
-  } else if (med_category == "angiotensin") {
-    
-    if (med_dose_unit == "ng/kg/min") {
-      factor <- 1 / 1000
-    } else if (med_dose_unit == "ng/kg/hr") {
-      factor <- 1 / 1000 / 60
-    } else {
-      return(NA_real_)
-    }
-    # Group 3: vasopressin
-    #   required_unit: "units/min"
-  } else if (med_category == "vasopressin") {
-    
-    if (med_dose_unit == "units/min") {
-      factor <- 1
-    } else if (med_dose_unit == "units/hr") {
-      factor <- 1 / 60
-    } else if (med_dose_unit == "milliunits/min") {
-      factor <- 1 / 1000
-    } else if (med_dose_unit == "milliunits/hr") {
-      factor <- 1 / 1000 / 60
-    } else {
-      return(NA_real_)
-    }
-    # If none of the above, return NA
-  } else {
-    return(NA_real_)
-  }
-  return(factor)
-}
-
 # Apply conversion logic
 meds_with_weights_dt[, conversion_factor := mapply(
   get_conversion_factor,
@@ -485,19 +528,42 @@ enc_on_vent <- icu_data |>
   filter(Ventilator == 1) |> 
   select(encounter_id) |> distinct()
 
+vent_encounters <- nrow(enc_on_vent)
+
 ventilator_filtered <- ventilator |> 
   filter(encounter_id %in% enc_on_vent$encounter_id) |> 
   left_join(
     icu_data %>%
       select(encounter_id, min_in_dttm, after_24hr),
-    by = "encounter_id") |>
-  mutate(recorded_dttm = ymd_hms(recorded_dttm),
-         fio2_set = as.numeric(fio2_set),
-         peep_set = as.numeric(peep_set)) |>
-  select(encounter_id, recorded_dttm, min_in_dttm,after_24hr,
-         device_category, mode_category, 
-         fio2_set, peep_set)
+    by = "encounter_id"
+  ) |> 
+  mutate(
+    recorded_dttm = ymd_hms(recorded_dttm),
+    fio2_set = as.numeric(fio2_set),
+    peep_set = as.numeric(peep_set),
+    # Convert fio2_set to decimal scale if its mean is greater than 1
+    fio2_set = if (mean(fio2_set, na.rm = TRUE) > 1) fio2_set / 100 else fio2_set
+  ) |> 
+  # Apply thresholds: convert outliers to NA
+  mutate(
+    peep_set = ifelse(peep_set >= 0 & peep_set <= 30, peep_set, NA_real_),
+    fio2_set = ifelse(fio2_set >= 0.21 & fio2_set <= 1, fio2_set, NA_real_)
+  ) |> 
+  select(
+    encounter_id, recorded_dttm, min_in_dttm, after_24hr,
+    device_category, mode_category, 
+    fio2_set, peep_set
+  )
 
+
+numeric_vars <- c("fio2_set", "peep_set")
+generate_histograms(
+  df = ventilator_filtered, 
+  numeric_vars = numeric_vars, 
+  bins = 30, 
+  color = "blue", 
+  output_path = paste0("output/graphs/histograms_fio2_peep_", site, ".png"),
+)
 
 # Summarize peep and fio2 during the first 24 hours of ICU admission
 ## Encounters not on vent during the first 24 hrs of ICU admission will be excluded
@@ -526,14 +592,55 @@ write.csv(table1_peep_fio2, paste0( "output/table1_peep_fio2_",site, '.csv'),
 required_modes <- c('Assist Control-Volume Control', 
                     'Pressure Control', 
                     'Pressure-Regulated Volume Control', 
-                    'SIMV', 'Pressure Support/CPAP', 'Volume Support', 'Other')
+                    'SIMV', 'Pressure Support/CPAP', 'Volume Support', 
+                    'Other')
 
-table1_mode_category <- ventilator_filtered |>
+mode_cat_filtered <- ventilator_filtered |>
   filter(!is.na(mode_category)) |> 
   arrange(encounter_id, recorded_dttm) |>  
   group_by(encounter_id) |> 
   slice_head(n=1) |>  # Get the first row for each encounter
-  ungroup() |> 
+  ungroup() 
+
+## MODE CATEGORY WITH VENT ENCOUNTERS
+table1_mode_category <- mode_cat_filtered |> 
+  group_by(mode_category) |>  
+  summarize(
+    n_encounters = n(),  # Count unique encounters with initial mode
+    .groups = "drop"  
+  ) |> 
+  mutate(
+    pct_encounters = (n_encounters / vent_encounters) * 100  # Calculate percentage
+  ) |> 
+  right_join(
+    tibble(mode_category = required_modes), 
+    by = "mode_category"
+  )
+
+no_mode_count <- vent_encounters - sum(table1_mode_category$n_encounters, na.rm = TRUE)
+no_mode_pct <- (no_mode_count / vent_encounters) * 100
+
+# Append the "No mode documented" row
+table1_mode_category <- table1_mode_category |> 
+  bind_rows(
+    tibble(
+      mode_category = "No mode documented",
+      n_encounters = no_mode_count,
+      pct_encounters = no_mode_pct
+    )
+  )
+
+table1_mode_category <- table1_mode_category |> 
+  bind_rows(
+    tibble(
+      mode_category = "Total",
+      n_encounters = sum(table1_mode_category$n_encounters, na.rm = TRUE),
+      pct_encounters = sum(table1_mode_category$pct_encounters, na.rm = TRUE),
+    )
+  )
+
+## MODE CATEGORY WITH ALL ENCOUNTERS
+table1_mode_category_overall <- mode_cat_filtered |> 
   group_by(mode_category) |>  
   summarize(
     n_encounters = n(),  # Count unique encounters with initial mode
@@ -547,7 +654,31 @@ table1_mode_category <- ventilator_filtered |>
     by = "mode_category"
   )
 
-write.csv(table1_mode_category, paste0( "output/table1_mode_category_",site, '.csv'), 
+no_mode_count_overall <- total_encounters - sum(table1_mode_category_overall$n_encounters, na.rm = TRUE)
+no_mode_pct_overall <- (no_mode_count_overall / total_encounters) * 100
+
+# Append the "No mode documented" row
+table1_mode_category_overall <- table1_mode_category_overall |> 
+  bind_rows(
+    tibble(
+      mode_category = "No mode documented",
+      n_encounters = no_mode_count_overall,
+      pct_encounters = no_mode_pct_overall
+    )
+  ) 
+
+table1_mode_category_overall <- table1_mode_category_overall |> 
+  bind_rows(
+    tibble(
+      mode_category = "Total",
+      n_encounters = sum(table1_mode_category_overall$n_encounters, na.rm = TRUE),
+      pct_encounters = sum(table1_mode_category_overall$pct_encounters, na.rm = TRUE),
+    )
+  )
+
+write.csv(table1_mode_category, paste0( "output/table1_mode_category_only_vent",site, '.csv'), 
+          row.names = FALSE)
+write.csv(table1_mode_category_overall, paste0( "output/table1_mode_category_all_encounters",site, '.csv'), 
           row.names = FALSE)
 
 ############################SOFA-97#############################################
@@ -577,14 +708,6 @@ vitals_icu <- cohort_24hr %>%
     names_from = vital_category,
     values_from = worst_value)
 rm(vitals_sofa_dt)
-
-calc_pao2 <- function(s) {
-  s <- s / 100
-  a <- (11700) / ((1 / s) - 1)
-  b <- sqrt((50^3) + (a^2))
-  pao2 <- ((b + a)^(1/3)) - ((b - a)^(1/3))
-  return(pao2)
-}
 
 vitals_icu <- vitals_icu %>%
   mutate(pao2_imputed_min = calc_pao2(spo2)) %>%
@@ -817,6 +940,16 @@ icu_sofa_data$sofa_97_24hr <- icu_sofa_data$sofa_cv_97 +
   icu_sofa_data$sofa_liver + 
   icu_sofa_data$sofa_resp + 
   icu_sofa_data$sofa_cns
+
+numeric_vars <- names(icu_sofa_data)[sapply(icu_sofa_data, is.numeric)]
+generate_histograms(
+  df = icu_sofa_data, 
+  numeric_vars = numeric_vars, 
+  bins = 30, 
+  color = "blue", 
+  output_path = paste0("output/graphs/histograms_sofa24_hrs_", site, ".png"),
+  max_cols = 6
+)
 
 table1_sofa <- icu_sofa_data %>%
   select(encounter_id, sofa_97_24hr, sofa_cv_97, sofa_coag, sofa_renal, sofa_liver, sofa_resp, sofa_cns) %>%
