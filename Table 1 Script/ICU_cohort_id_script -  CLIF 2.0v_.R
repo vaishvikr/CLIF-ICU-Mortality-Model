@@ -6,6 +6,7 @@
 # Inputs: CLIF-2.0 tables - patient, hospitalization, ADT, vitals, labs, 
 #                           respiratory support, medication admin continuous, 
 #                           patient assessments
+#.        config.json elements
 # Outputs: icu_data.csv (intermediate dataset for further analysis); 
 #          table1_meds_<site>.csv; table1_peep_fio2_<site>.csv; 
 #          table1_mode_category_<site>.csv; table1_sofa_<site>.csv; table1_<site>.csv
