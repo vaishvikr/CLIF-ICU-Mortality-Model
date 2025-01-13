@@ -1,24 +1,31 @@
 
+"
+Script Name: ICU_cohort_id_script.R
+Purpose: Identify the cohort for CLIF concept paper POCs and generate table 1
+Authors: Vaishvik Chaudhari, Kaveri Chhikara, Rachel Baccile
+Inputs: 1. CLIF-2.0 tables - patient, hospitalization, ADT, vitals, labs, 
+                          respiratory support, medication admin continuous, 
+                          patient assessments
 
-# Script Name: ICU_cohort_id_script.R
-# Purpose: Identify the cohort for CLIF concept paper POCs and generate table 1
-# Authors: Vaishvik Chaudhari, Kaveri Chhikara, Rachel Baccile
-# Inputs: 1. CLIF-2.0 tables - patient, hospitalization, ADT, vitals, labs, 
-#                           respiratory support, medication admin continuous, 
-#                           patient assessments
-#.        2. config.json elements
-# Outputs: 1. icu_data.csv (intermediate dataset for further analysis); 
-#          2. table1_meds_<site>.csv; 
-#          3. table1_peep_fio2_<site>.csv; 
-#          4. table1_mode_category_<site>.csv; 
-#          5. table1_sofa_<site>.csv; 
-#          6. table1_<site>.csv
-#          7. histograms of vent settings and SOFA components
+           required_meds        = norepinephrine, epinephrine, phenylephrine, vasopressin, 
+                                   dopamine, angiotensin, dobutamine, milrinone
+           required_vitals      = weight_kg, sbp, dbp, map, spo2
+           required_labs        = creatinine, bilirubin_total, po2_arterial, platelet_count
+           required_assessments = gcs_total
+        2. config.json elements
+Outputs: 1. icu_data.csv (intermediate dataset for further analysis); 
+         2. table1_meds_<site>.csv; 
+         3. table1_peep_fio2_<site>.csv; 
+         4. table1_mode_category_<site>.csv; 
+         5. table1_sofa_<site>.csv; 
+         6. table1_<site>.csv
+         7. histograms of vent settings and SOFA components
+"
 
 ########################## SETUP ###############################################
 packages <- c("jsonlite", "duckdb", "lubridate", "data.table",
-              "tidyverse", "dplyr","table1",'rvest', "readr", "ggplot",
-              "arrow", "fst", "lightgbm", "caret", "Metrics", "pathwork",
+              "tidyverse", "dplyr","table1",'rvest', "readr", "ggplot2",
+              "arrow", "fst", "lightgbm", "caret", "Metrics", "patchwork",
               "ROCR", "pROC", "collapse")
 
 install_if_missing <- function(package) {
@@ -800,7 +807,6 @@ labs_dt <- labs |>
       (lab_category == "platelet_count" & lab_value_numeric >= 0 & lab_value_numeric <= 2000)) |>
   filter(!is.na(lab_value_numeric)) |>
   select(encounter_id, lab_order_dttm, lab_category, lab_value_numeric) 
-# labs_dt <- as_tibble(labs_dt)
 
 rm(labs)
 gc()
