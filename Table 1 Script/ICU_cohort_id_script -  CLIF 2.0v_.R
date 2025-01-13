@@ -1,3 +1,16 @@
+
+
+# Script Name: ICU_cohort_id_script.R
+# Purpose: Identify the cohort for CLIF concept paper POCs and generate table 1
+# Author: Vaishvik Chaudhari, Kaveri Chhikara, Rachel Baccile
+# Inputs: CLIF-2.0 tables - patient, hospitalization, ADT, vitals, labs, 
+#                           respiratory support, medication admin continuous, 
+#                           patient assessments
+# Outputs: icu_data.csv (intermediate dataset for further analysis); 
+#          table1_meds_<site>.csv; table1_peep_fio2_<site>.csv; 
+#          table1_mode_category_<site>.csv; table1_sofa_<site>.csv; table1_<site>.csv
+
+########################## SETUP ###############################################
 packages <- c("jsonlite", "duckdb", "lubridate", "data.table",
               "tidyverse", "dplyr","table1",'rvest', "readr", 
               "arrow", "fst", "lightgbm", "caret", "Metrics", 
@@ -64,18 +77,8 @@ demog <- read_data(paste0(tables_location, "/clif_patient",
                           file_type))
 ventilator <- read_data(paste0(tables_location, "/clif_respiratory_support", 
                                file_type))
-meds <- read_data(paste0(tables_location, "/clif_medication_admin_continuous", 
-                         file_type)) 
-vitals <- read_data(paste0(tables_location, "/clif_vitals", 
-                           file_type))
-scores <- read_data(paste0(tables_location, 
-                           "/clif_patient_assessments", 
-                           file_type))
-labs <- read_data(paste0(tables_location, 
-                         "/clif_labs", 
-                         file_type))
 
-
+############################ COHORT IDENTEIFICATION ############################
 # Rename columns in the location data frame
 location <- location %>%
   rename(encounter_id = hospitalization_id)
@@ -138,7 +141,7 @@ icu_data <- icu_data %>%
   group_by(encounter_id) %>%
   mutate(RANK = rank(in_dttm, ties.method = "first"))
 
-  # Compute minimum rank for ICU locations
+# Compute minimum rank for ICU locations
 min_icu <- icu_data %>%
   filter(location_category == "ICU") %>%
   group_by(encounter_id) %>%
@@ -160,7 +163,8 @@ icu_data <- icu_data %>%
 # Create a new group_id based on changes in location_category
 icu_data <- icu_data %>%
   group_by(encounter_id) %>%
-  mutate(group_id = cumsum(location_category != lag(location_category, default = first(location_category)))) %>%
+  mutate(group_id = cumsum(location_category != lag(location_category, 
+                                                    default = first(location_category)))) %>%
   ungroup()
 
 icu_data <- icu_data %>%
@@ -195,12 +199,14 @@ icu_data <- icu_data %>%
 
 # Select specific columns
 icu_data <- icu_data %>%
-  select(patient_id, encounter_id, min_in_dttm, after_24hr,max_out_dttm, age, dispo)
+  select(patient_id, encounter_id, min_in_dttm, after_24hr,max_out_dttm, 
+         age, dispo)
 
 # Merge with demographic data and select specific columns
 icu_data <- icu_data %>%
   left_join(demog, by = "patient_id") %>%
-  select(encounter_id, min_in_dttm, after_24hr,max_out_dttm, age, dispo, sex, ethnicity, race)
+  select(encounter_id, min_in_dttm, after_24hr,max_out_dttm, age, dispo, 
+         sex, ethnicity, race)
 
 ventilator_imv <- ventilator %>%
   filter(device_category =="IMV")%>%
@@ -243,15 +249,23 @@ icu_data <- icu_data %>%
          Ventilator = as.factor(Ventilator))
 
 # Calculate the difference in hours
-icu_data$ICU_stay_hrs <- as.numeric(difftime(icu_data$max_out_dttm, icu_data$min_in_dttm, units = "secs")) / 3600
+icu_data$ICU_stay_hrs <- as.numeric(difftime(icu_data$max_out_dttm, 
+                                             icu_data$min_in_dttm, 
+                                             units = "secs")) / 3600
 
 write.csv(icu_data, paste0( "output/ICU_cohort", '.csv'), row.names = FALSE)
 
-
+rm(location, encounter)
+gc()
 ############################VASOPRESSORS and VITALS############################
+meds <- read_data(paste0(tables_location, "/clif_medication_admin_continuous", 
+                         file_type)) 
+vitals <- read_data(paste0(tables_location, "/clif_vitals", 
+                           file_type))
 
 required_meds <- c("norepinephrine", "epinephrine", "phenylephrine",
-                   "vasopressin", "dopamine", "angiotensin", "dobutamine")
+                   "vasopressin", "dopamine", "angiotensin", 
+                   "dobutamine", "milrinone")
 required_vitals <- c("weight_kg", "sbp", "dbp", "map")
 
 cohort_ids <- icu_data |> 
@@ -271,7 +285,7 @@ vitals_weight_dt <- vitals |>
       select(encounter_id, min_in_dttm, after_24hr),
     by = "encounter_id") |>
   # filter to the first 24 hours
-  mutate(recorded_dttm = ymd_hms(recorded_dttm)) |>  # Convert to POSIXct, adjust the function as per your date format
+  mutate(recorded_dttm = ymd_hms(recorded_dttm)) |>  # Convert to POSIXct
   filter(
     recorded_dttm >= min_in_dttm,
     recorded_dttm <= after_24hr) |>
@@ -295,6 +309,9 @@ meds_dt <- meds |>
     admin_dttm <= after_24hr) |>
   select(encounter_id, admin_dttm, med_category, med_dose, med_dose_unit)
 
+rm(meds)
+gc()
+
 # Convert both to data.table
 setDT(vitals_weight_dt)
 setDT(meds_dt)
@@ -302,7 +319,7 @@ setkey(vitals_weight_dt, encounter_id, recorded_dttm)
 setkey(meds_dt, encounter_id, admin_dttm)
 
 # Perform rolling join
-#forward picks the most recent weight at or before admin_time so 
+# forward picks the most recent weight at or before admin_time so 
 # we don't jump forward in time to a future weight.
 meds_with_weights_dt <- meds_dt[
   vitals_weight_dt,
@@ -346,6 +363,10 @@ med_unit_info <- list(
   dobutamine = list(
     required_unit = "mcg/kg/min",
     acceptable_units = c("mcg/kg/min", "mcg/kg/hr", "mg/kg/hr", "mcg/min", "mg/hr")
+  ),
+  milrinone = list(
+    required_unit = "mcg/kg/min",
+    acceptable_units = c("mcg/kg/min", "mcg/kg/hr", "mg/kg/hr", "mcg/min", "mg/hr")
   )
 )
 
@@ -366,7 +387,7 @@ get_conversion_factor <- function(med_category, med_dose_unit, weight_kg) {
   # Group 1: norepinephrine, epinephrine, phenylephrine, dopamine, metaraminol, dobutamine
   #   required_unit: "mcg/kg/min"
   if (med_category %in% c("norepinephrine", "epinephrine", "phenylephrine",
-                          "dopamine", "metaraminol", "dobutamine")) {
+                          "dopamine", "milrinone", "dobutamine")) {
     if (med_dose_unit == "mcg/kg/min") {
       factor <- 1
     } else if (med_dose_unit == "mcg/kg/hr") {
@@ -430,8 +451,8 @@ meds_with_weights_dt[, med_dose_converted :=
 
 ## excluding zeroes- zeores correspond to when the med was paused or stopped
 ## not releavnt for calculating the median of the med dose 
-med_summaries <- as_tibble(meds_with_weights_dt) %>%
-  group_by(encounter_id, med_category) %>%
+med_summaries <- as_tibble(meds_with_weights_dt) |> 
+  group_by(encounter_id, med_category) |> 
   summarize(
     median_dose = median(med_dose_converted, na.rm = TRUE),
     iqr_lower   = quantile(med_dose_converted, 0.25, na.rm = TRUE),
@@ -439,8 +460,8 @@ med_summaries <- as_tibble(meds_with_weights_dt) %>%
     .groups     = "drop"
   )
 
-cohort_med_summaries <- med_summaries %>%
-  group_by(med_category) %>%
+table1_meds <- med_summaries |> 
+  group_by(med_category) |> 
   summarize(
     overall_median_dose = median(median_dose[median_dose != 0], na.rm = TRUE),
     overall_iqr_lower   = quantile(median_dose[median_dose != 0], 0.25, na.rm = TRUE),
@@ -448,57 +469,84 @@ cohort_med_summaries <- med_summaries %>%
     n_encounters        = n_distinct(encounter_id),
     pct_encounters      = 100 * n_encounters / total_encounters,
     .groups             = "drop"
+  ) |> # the join ensures all required meds are in the final table
+  right_join(
+    tibble(med_category = required_meds), 
+    by = "med_category"
   )
 
-write.csv(cohort_med_summaries, paste0( "output/table1_meds",site, '.csv'), 
+write.csv(table1_meds, paste0( "output/table1_meds_",site, '.csv'), 
           row.names = FALSE)
 
 ######################VENTILATOR SUMMARY########################################
+# unique encounters on vent
+enc_on_vent <- icu_data |> 
+  filter(Ventilator == 1) |> 
+  select(encounter_id) |> distinct()
 
 ventilator_filtered <- ventilator |> 
-  filter(encounter_id %in% cohort_ids$encounter_id) |> 
+  filter(encounter_id %in% enc_on_vent$encounter_id) |> 
   left_join(
     icu_data %>%
       select(encounter_id, min_in_dttm, after_24hr),
     by = "encounter_id") |>
-  # keep only rows in the first 24 hours of ICU
   mutate(recorded_dttm = ymd_hms(recorded_dttm),
          fio2_set = as.numeric(fio2_set),
          peep_set = as.numeric(peep_set)) |>
-  filter(
-    recorded_dttm >= min_in_dttm,
-    recorded_dttm <= after_24hr) |>
-  select(encounter_id, recorded_dttm, device_category, mode_category, 
+  select(encounter_id, recorded_dttm, min_in_dttm,after_24hr,
+         device_category, mode_category, 
          fio2_set, peep_set)
 
 
-# Summarize 
-peep_fio2_summary <- ventilator_filtered %>%
+# Summarize peep and fio2 during the first 24 hours of ICU admission
+## Encounters not on vent during the first 24 hrs of ICU admission will be excluded
+table1_peep_fio2 <- ventilator_filtered |> 
+  filter(
+    recorded_dttm >= min_in_dttm,
+    recorded_dttm <= after_24hr) |>
   summarize(
     median_peep = median(peep_set, na.rm = TRUE),
-    iqr_peep_lo = quantile(peep_set, 0.25, na.rm = TRUE),
-    iqr_peep_hi = quantile(peep_set, 0.75, na.rm = TRUE),
+    iqr_peep_lower = quantile(peep_set, 0.25, na.rm = TRUE),
+    iqr_peep_upper = quantile(peep_set, 0.75, na.rm = TRUE),
     
     median_fio2 = median(fio2_set, na.rm = TRUE),
-    iqr_fio2_lo = quantile(fio2_set, 0.25, na.rm = TRUE),
-    iqr_fio2_hi = quantile(fio2_set, 0.75, na.rm = TRUE)
+    iqr_fio2_lower = quantile(fio2_set, 0.25, na.rm = TRUE),
+    iqr_fio2_upper = quantile(fio2_set, 0.75, na.rm = TRUE)
   )
 
-write.csv(peep_fio2_summary, paste0( "output/table1_peep_fio2",site, '.csv'), 
+write.csv(table1_peep_fio2, paste0( "output/table1_peep_fio2_",site, '.csv'), 
           row.names = FALSE)
 
+# Summarise initial mode category for each encounter
+# Note: without filling missing values, the number of encounters with info on 
+# mode catgeory will be less than the number of encounters identified on IMV.
+# Not filtering time for first 24 hrs because we have not applied the waterfall here
 
-mode_category_summary <- ventilator_filtered %>%
-  group_by(mode_category) %>%
+required_modes <- c('Assist Control-Volume Control', 
+                    'Pressure Control', 
+                    'Pressure-Regulated Volume Control', 
+                    'SIMV', 'Pressure Support/CPAP', 'Volume Support', 'Other')
+
+table1_mode_category <- ventilator_filtered |>
+  filter(!is.na(mode_category)) |> 
+  arrange(encounter_id, recorded_dttm) |>  
+  group_by(encounter_id) |> 
+  slice_head(n=1) |>  # Get the first row for each encounter
+  ungroup() |> 
+  group_by(mode_category) |>  
   summarize(
-    n_encounters = n_distinct(encounter_id),  # Count unique encounters
-    .groups = "drop"  # Ungroup after summarizing
-  ) %>%
+    n_encounters = n(),  # Count unique encounters with initial mode
+    .groups = "drop"  
+  ) |> 
   mutate(
-    pct_encounters = (n_encounters / total_encounters) * 100  # Percentage calculation
+    pct_encounters = (n_encounters / total_encounters) * 100  # Calculate percentage
+  ) |> 
+  right_join(
+    tibble(mode_category = required_modes), 
+    by = "mode_category"
   )
 
-write.csv(mode_category_summary, paste0( "output/table1_mode_category",site, '.csv'), 
+write.csv(table1_mode_category, paste0( "output/table1_mode_category_",site, '.csv'), 
           row.names = FALSE)
 
 ############################SOFA-97#############################################
@@ -613,6 +661,10 @@ resp_support_icu <- cohort_24hr %>%
   select(encounter_id, resp_support_max, fio2_max)
 
 ## Now Labs
+labs <- read_data(paste0(tables_location, 
+                         "/clif_labs", 
+                         file_type))
+
 labs_dt <- labs |>
   rename(encounter_id = hospitalization_id) |>
   filter(encounter_id %in% cohort_24hr$encounter_id) |>
@@ -624,6 +676,9 @@ labs_dt <- labs |>
   filter(!is.na(lab_value_numeric)) |>
   select(encounter_id, lab_order_dttm, lab_category, lab_value_numeric) 
 # labs_dt <- as_tibble(labs_dt)
+
+rm(labs)
+gc()
 
 # Filter for labs taken within first 24 hours of being in the ICU
 labs_icu <- cohort_24hr %>%
@@ -653,12 +708,17 @@ labs_icu <- cohort_24hr %>%
     .groups = "drop")
 
 ## Now GCS Scores
+scores <- read_data(paste0(tables_location, 
+                           "/clif_patient_assessments", 
+                           file_type))
 scores_dt <- scores |>
   rename(encounter_id = hospitalization_id) |>
   filter(encounter_id %in% cohort_24hr$encounter_id) |>
   filter(assessment_category == "gcs_total") |> 
   filter(!is.na(numerical_value)) |>
   select(encounter_id, recorded_dttm, numerical_value)
+rm(scores)
+gc()
 
 scores_dt$encounter_id <- as.character(scores_dt$encounter_id)
 scores_dt$min_gcs_score <- as.numeric(scores_dt$numerical_value)
@@ -676,7 +736,7 @@ meds_icu <- cohort_24hr %>%
   filter((admin_dttm >= min_in_dttm) & (admin_dttm <=after_24hr)) %>%
   select(encounter_id, admin_dttm, med_category, med_dose_converted) %>%
   distinct() %>%
-  group_by(encounter_id, admin_dttm, med_category) %>%
+  group_by(encounter_id,  med_category) %>%
   summarise(worst_value = max(med_dose_converted, na.rm = TRUE)) %>%
   pivot_wider(
     names_from = med_category,
@@ -757,7 +817,7 @@ icu_sofa_data$sofa_97_24hr <- icu_sofa_data$sofa_cv_97 +
   icu_sofa_data$sofa_resp + 
   icu_sofa_data$sofa_cns
 
-summary_sofa_df <- icu_sofa_data %>%
+table1_sofa <- icu_sofa_data %>%
   select(encounter_id, sofa_97_24hr, sofa_cv_97, sofa_coag, sofa_renal, sofa_liver, sofa_resp, sofa_cns) %>%
   pivot_longer(
     cols = -encounter_id,
@@ -771,7 +831,7 @@ summary_sofa_df <- icu_sofa_data %>%
     .groups             = "drop"
   )
 
-write.csv(summary_sofa_df, paste0( "output/table1_sofa",site, '.csv'), 
+write.csv(table1_sofa, paste0( "output/table1_sofa_",site, '.csv'), 
           row.names = FALSE)
 
 ############################TABLE ONE############################################
